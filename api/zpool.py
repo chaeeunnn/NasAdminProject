@@ -17,16 +17,6 @@ zpool_create_model = zpool_api.model('CreateZpool', {
 @zpool_api.route('/disks')
 class DiskList(Resource):
     def get(self):
-        
-        # result = subprocess.run('lsblk', capture_output=True, shell=True, encoding='UTF-8')
-        
-        # response = {
-        #     'stdout': result.stdout.strip().split('\n'), # 줄 단위로 분할해서 출력
-        #     'stderr': result.stderr,
-        #     'returncode': result.returncode
-        # }
-        
-        # return jsonify(response)
         # 이름, 사이즈(GB), 모델명, 타입 출력
         result = subprocess.run("lsblk -dn -o NAME,SIZE,MODEL,TYPE -P", shell=True, capture_output=True, encoding='utf-8')
         
@@ -36,6 +26,7 @@ class DiskList(Resource):
         
         for line in lines:
             fields = dict(re.findall(r'(\w+)="(.*?)"', line))
+            print(fields)
             if fields.get('TYPE') != 'disk':
                 continue
             
@@ -63,28 +54,20 @@ class DiskList(Resource):
 class ZpoolList(Resource):
     def get(self):
         
-        result = subprocess.run('zpool list -H', capture_output=True, shell=True, encoding='UTF-8')
+        result = subprocess.run('zpool list', capture_output=True, shell=True, encoding='UTF-8')
         lines = result.stdout.strip().split('\n')
+        
         zpool_list = []
+        column_names = lines[0].split()
         
-        for line in lines:
-            columns = line.split('\t')  # -H 옵션은 탭 구분자를 사용
-            if len(columns) < 11:
-                continue  # 누락된 필드 방지
-            zpool_list.append({
-                'NAME': columns[0],
-                'SIZE': columns[1],
-                'ALLOC': columns[2],
-                'FREE': columns[3],
-                'CKPOINT': columns[4],
-                'EXPANDSZ': columns[5],
-                'FRAG': columns[6],
-                'CAP': columns[7],
-                'DEDUP': columns[8],
-                'HEALTH': columns[9],
-                'ALTROOT': columns[10]
-            })
-        
+        print(lines)
+
+        for line in lines[1:]:
+            fields = line.split() # -H 옵션은 tab 구분자 사용
+            if len(fields) < len(column_names):
+                continue  # 필드 누락 방지
+            zpool_list.append(dict(zip(column_names, fields)))
+
         response = {
             'stdout': zpool_list,
             'stderr': result.stderr,
@@ -164,68 +147,47 @@ class CreateZpool(Resource):
                 'returncode': e.returncode
             }, 500
             
-# zpool 상세 조회
+# zpool 상세 조회 (속성 전체 조회)
 # @zpool_bp.route('/status/<pool_name>', methods=['GET'])
-@zpool_api.route('/status/<pool_name>')
+@zpool_api.route('/properties/<pool_name>')
 class ZpoolStatus(Resource):
     def get(self, pool_name):
         try:
-            # subprocess.run으로 zpool status 명령 실행
             result = subprocess.run(
-                ['zpool', 'status', pool_name],
+                ['zpool', 'get', 'all', pool_name],
                 capture_output=True,
                 encoding='utf-8',
                 check=True
             )
             
             lines = result.stdout.strip().split('\n')
-            config = []
-            spares = []
-            
-            parsing_section = 'config'
-            for line in lines[5:]:
-                if not line.strip():
-                    break
-                columns = line.split()
-                print(columns)
-                if columns[0] == 'spares':
-                    parsing_section = 'spares'
-                    continue
-                if parsing_section == 'config':
-                    config.append({
-                        'NAME': columns[0],
-                        'STATE': columns[1],
-                        'READ': columns[2],
-                        'WRITE': columns[3],
-                        'CKSUM': columns[4],
-                    })
-                elif parsing_section == 'spares':
-                    spares.append({
-                        'NAME': columns[0],
-                        'STATE': columns[1]
+            # 첫 줄은 헤더(NAME PROPERTY VALUE SOURCE)
+            properties = []
+            for line in lines[1:]:
+                parts = line.split(None, 3)  # 최대 4개 컬럼 분리
+                if len(parts) == 4:
+                    _, prop, value, source = parts # name은 무시
+                    properties.append({
+                        prop: value,
+                        'source': source
                     })
             
-            zpool_status = {
-                'pool': lines[0].split()[-1],
-                'status': lines[1].split()[-1],
-                'config': config,
-                'spares': spares
-                }
-            
-            return jsonify({
-                'stdout': zpool_status,
+            response = {
+                'pool_name': pool_name,
+                'properties': properties,
                 'stderr': result.stderr,
                 'returncode': result.returncode
-            })
+            }
             
+            return response, 200
+        
         except subprocess.CalledProcessError as e:
-            # 명령 실패시 오류 정보 반환
-            return jsonify({
-                'error': f'Failed to get status for zpool {pool_name}',
+            return {
+                'error': f'Failed to get properties for zpool {pool_name}',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode
-            }), 500
+            }, 500
         
 # zpool 삭제
 # @zpool_bp.route('/delete/<pool_name>', methods=['DELETE'])
