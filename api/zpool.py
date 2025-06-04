@@ -1,5 +1,6 @@
 from flask import jsonify, request
 from flask_restx import Namespace, Resource, fields
+from flask_jwt_extended import jwt_required
 import subprocess, os, re
 from utils.zpool_utils import is_device_in_use, is_pool_name_exists, get_smart_health
 
@@ -14,8 +15,10 @@ zpool_create_model = zpool_api.model('CreateZpool', {
     
 # 물리 디스크 목록
 # @zpool_bp.route('/disks', methods=['GET'])
+# 수정) osdisk 제외
 @zpool_api.route('/disks')
 class DiskList(Resource):
+    @jwt_required()
     def get(self):
         # 이름, 사이즈(GB), 모델명, 타입 출력
         result = subprocess.run("lsblk -dn -o NAME,SIZE,MODEL,TYPE -P", shell=True, capture_output=True, encoding='utf-8')
@@ -52,6 +55,7 @@ class DiskList(Resource):
 # @zpool_bp.route('/list', methods=['GET'])
 @zpool_api.route('/list')
 class ZpoolList(Resource):
+    @jwt_required()
     def get(self):
         
         result = subprocess.run('zpool list', capture_output=True, shell=True, encoding='UTF-8')
@@ -79,6 +83,7 @@ class ZpoolList(Resource):
 # zpool 생성
 @zpool_api.route('/create')
 class CreateZpool(Resource):
+    @jwt_required()
     @zpool_api.expect(zpool_create_model)
     def post(self):
         data = request.get_json()
@@ -151,6 +156,7 @@ class CreateZpool(Resource):
 # @zpool_bp.route('/status/<pool_name>', methods=['GET'])
 @zpool_api.route('/properties/<pool_name>')
 class ZpoolStatus(Resource):
+    @jwt_required()
     def get(self, pool_name):
         try:
             result = subprocess.run(
@@ -193,6 +199,7 @@ class ZpoolStatus(Resource):
 # @zpool_bp.route('/delete/<pool_name>', methods=['DELETE'])
 @zpool_api.route('/delete/<pool_name>')
 class DeleteZpool(Resource):
+    @jwt_required()
     def delete(self, pool_name):
         try:
             result = subprocess.run(
@@ -212,6 +219,68 @@ class DeleteZpool(Resource):
         except subprocess.CalledProcessError as e:
             return jsonify({
                 'error': f'Failed to delete zpool {pool_name}',
+                'stdout': e.stdout,
+                'stderr': e.stderr,
+                'returncode': e.returncode
+            }), 500
+
+
+@zpool_api.route('/status/<pool_name>')
+class ZpoolStatus(Resource):
+    def get(self, pool_name):
+        try:
+            # subprocess.run으로 zpool status 명령 실행
+            result = subprocess.run(
+                ['zpool', 'status', pool_name],
+                capture_output=True,
+                encoding='utf-8',
+                check=True
+            )
+            
+            lines = result.stdout.strip().split('\n')
+            config = []
+            spares = []
+            
+            parsing_section = 'config'
+            for line in lines[5:]:
+                if not line.strip():
+                    break
+                columns = line.split()
+                print(columns)
+                if columns[0] == 'spares':
+                    parsing_section = 'spares'
+                    continue
+                if parsing_section == 'config':
+                    config.append({
+                        'NAME': columns[0],
+                        'STATE': columns[1],
+                        'READ': columns[2],
+                        'WRITE': columns[3],
+                        'CKSUM': columns[4],
+                    })
+                elif parsing_section == 'spares':
+                    spares.append({
+                        'NAME': columns[0],
+                        'STATE': columns[1]
+                    })
+            
+            zpool_status = {
+                'pool': lines[0].split()[-1],
+                'status': lines[1].split()[-1],
+                'config': config,
+                'spares': spares
+                }
+            
+            return jsonify({
+                'stdout': zpool_status,
+                'stderr': result.stderr,
+                'returncode': result.returncode
+            })
+            
+        except subprocess.CalledProcessError as e:
+            # 명령 실패시 오류 정보 반환
+            return jsonify({
+                'error': f'Failed to get status for zpool {pool_name}',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode

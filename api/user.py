@@ -74,6 +74,7 @@ class UserTokenRefresh(Resource):
 @user_api.route('/register')
 class UserRegister(Resource):
     @user_api.expect(register_model)
+    @jwt_required()
     def post(self):
         data = request.get_json()
         username = data.get('username')

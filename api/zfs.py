@@ -1,5 +1,6 @@
 from flask import request
 from flask_restx import Namespace, Resource, fields
+from flask_jwt_extended import jwt_required
 import subprocess
 
 zfs_api = Namespace('zfs', description='ZFS 관련 API')
@@ -21,6 +22,7 @@ create_zfs_model = zfs_api.model('CreateZFS', {
 # zfs 전체 조회
 @zfs_api.route('/list')
 class ZFS_list(Resource):
+    @jwt_required()
     def get(self):
         columns = ['NAME', 'USED', 'AVAIL', 'REFER', 'MOUNTPOINT']
         result = subprocess.run(['zfs', 'list', '-H', '-o', 'name,used,avail,refer,mountpoint'], capture_output=True, encoding='utf-8')
@@ -42,6 +44,7 @@ class ZFS_list(Resource):
 # zfs 상세 조회 (속성)
 @zfs_api.route('/properties')
 class ZFS_Status(Resource):
+    @jwt_required()
     @zfs_api.expect(get_zfs_model)
     def post(self):
         data = request.get_json()
@@ -84,6 +87,7 @@ class ZFS_Status(Resource):
 # zfs 생성
 @zfs_api.route('/create')
 class ZFSCreate(Resource):
+    @jwt_required()
     @zfs_api.expect(create_zfs_model)
     def post(self):
         data = request.json
@@ -100,13 +104,13 @@ class ZFSCreate(Resource):
             # 1. 파일시스템 생성
             subprocess.run(['zfs', 'create', full_name], check=True)
 
-            # 2. 권한 설정 (기본값: 664)
+            # 2. 권한 설정 (기본값: 775)
             mount_path = f"/{full_name}"
-            subprocess.run(['chmod', '664', mount_path], check=True)
+            subprocess.run(['chmod', '775', mount_path], check=True)
 
             # 3. 속성 설정 (있을 때만)
             if data.get('quota'):
-                subprocess.run(['zfs', 'set', f"quota={data['quota']}", full_name], check=True)
+                subprocess.run(['zfs', 'set', f"quota={data['quota']}G", full_name], check=True)
             if data.get('compression'):
                 subprocess.run(['zfs', 'set', f"compression={data['compression']}", full_name], check=True)
             if data.get('readonly'):
@@ -115,10 +119,7 @@ class ZFSCreate(Resource):
                 subprocess.run(['zfs', 'set', f"mountpoint={data['mountpoint']}", full_name], check=True)
 
             return {
-                'message': f'{full_name} 생성 및 설정 완료',
-                'stdout': result.stdout.strip().split('\n'),
-                'stderr': result.stderr,
-                'returncode': result.returncode
+                'message': f'{full_name} 생성 및 설정 완료'
                 }, 201
 
         except subprocess.CalledProcessError as e:
@@ -127,6 +128,7 @@ class ZFSCreate(Resource):
 # zfs 삭제
 @zfs_api.route('/delete/<pool_name>/<zfs_name>')
 class DeleteZFS(Resource):
+    @jwt_required()
     def delete(self, pool_name, zfs_name):
         full_name = f'{pool_name}/{zfs_name}'
         try:

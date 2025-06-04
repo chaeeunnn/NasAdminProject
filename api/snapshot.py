@@ -1,5 +1,6 @@
 from flask import request
 from flask_restx import Namespace, Resource, fields
+from flask_jwt_extended import jwt_required
 import subprocess
 from datetime import datetime
 
@@ -17,6 +18,7 @@ snapshot_rollback_model = snapshot_api.model('RollbackSnapshot', {
 # 스냅샷 생성
 @snapshot_api.route('/create')
 class CreateSnapshot(Resource):
+    @jwt_required()
     @snapshot_api.expect(create_snapshot_model)
     def post(self):
         data = request.json
@@ -44,6 +46,7 @@ class CreateSnapshot(Resource):
 # 스냅샷 목록 조회
 @snapshot_api.route('/list')
 class ListSnapshots(Resource):
+    @jwt_required()
     def get(self):
         try:
             result = subprocess.run(['zfs', 'list', '-t', 'snapshot', '-H', '-o', 'name,used,creation'],
@@ -75,6 +78,7 @@ class ListSnapshots(Resource):
 # 스냅샷 롤백
 @snapshot_api.route('/rollback')
 class RollbackSnapshot(Resource):
+    @jwt_required()
     @snapshot_api.expect(snapshot_rollback_model)
     def post(self):
         data = request.get_json()
@@ -99,6 +103,7 @@ class RollbackSnapshot(Resource):
 # 스냅샷 삭제
 @snapshot_api.route('/delete/<string:pool_name>/<string:zfs_name>/<string:date>')
 class DeleteSnapshot(Resource):
+    @jwt_required()
     def delete(self, pool_name, zfs_name, date):
         full_snapshot_name = f"{pool_name}/{zfs_name}@{date}"
 
