@@ -5,17 +5,11 @@ from api.zfs import zfs_api
 from api.nfs import nfs_api
 from api.snapshot import snapshot_api
 from api.user import user_api
-from flask_jwt_extended import JWTManager
-from datetime import timedelta
+from utils.jwt_utils import configure_jwt
 
 app = Flask(__name__)
 
-jwt = JWTManager(app)
-
-app.config['JWT_SECRET_KEY'] = 'your-secret-key'
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(minutes=30)
-app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(hours=1)
-app.config['ALLOWED_IP_RANGES'] = ['192.168.20.0/24','192.168.20.0/24','192.168.50.0/24','127.0.0.1/32']
+configure_jwt(app)
 
 # Api 인스턴스 생성
 authorizations = {
@@ -24,6 +18,12 @@ authorizations = {
         'in': 'header',
         'name': 'Authorization',
         'description': "JWT Authorization header using the Bearer scheme. Example: 'Bearer {token}'"
+    },
+    'refresh_jwt': {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'Authorization',
+        'description': "Refresh Token. Example: 'Bearer {refresh_token}'"
     }
 }
 
