@@ -27,6 +27,7 @@ register_model = user_api.model('Register', {
 # 로그인
 @user_api.route('/login')
 class UserLogin(Resource):
+    @user_api.doc(description='로그인')
     @user_api.expect(login_model)
     def post(self):
         data = request.get_json()
@@ -52,6 +53,7 @@ class UserLogin(Resource):
 # 로그아웃
 @user_api.route('/logout')
 class UserLogout(Resource):
+    @user_api.doc(description='로그아웃')
     @jwt_required()
     def post(self):
         jti = get_jwt()['jti']
@@ -61,7 +63,7 @@ class UserLogout(Resource):
 # 로그인 연장 (refresh 토큰 발급)
 @user_api.route('/refresh')
 class UserTokenRefresh(Resource):
-    @user_api.doc(security='refresh_jwt')
+    @user_api.doc(security='refresh_jwt', description='로그인 연장 (refresh 토큰 필요)')
     @jwt_required(refresh=True)
     def post(self):
         identity = get_jwt_identity()
@@ -74,6 +76,7 @@ class UserTokenRefresh(Resource):
 # 사용자 등록
 @user_api.route('/register')
 class UserRegister(Resource):
+    @user_api.doc(description='사용자 등록')
     @user_api.expect(register_model)
     @jwt_required()
     def post(self):

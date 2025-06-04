@@ -18,24 +18,38 @@ zpool_create_model = zpool_api.model('CreateZpool', {
 # 수정) osdisk 제외
 @zpool_api.route('/disks')
 class DiskList(Resource):
+    @zpool_api.doc(description='물리 디스크 목록 조회')
     @jwt_required()
     def get(self):
+        # 1. 루트가 마운트된 디스크명 추출
+        root_mount = subprocess.run("findmnt -n -o SOURCE /boot", shell=True, capture_output=True, text=True)
+        root_device = root_mount.stdout.strip()  # 예: /dev/sda2
+
+        os_disk = ''
+        if root_device.startswith('/dev/'):
+            # 파티션 이름에서 디스크 이름만 추출 (예: /dev/sda2 → sda)
+            os_disk = re.findall(r'/dev/([a-z]+)', root_device)[0]
+        
+        print(os_disk)
+
         # 이름, 사이즈(GB), 모델명, 타입 출력
         result = subprocess.run("lsblk -dn -o NAME,SIZE,MODEL,TYPE -P", shell=True, capture_output=True, encoding='utf-8')
         
         lines = result.stdout.strip().split('\n')
-        print(lines)
         disks = []
         
         for line in lines:
             fields = dict(re.findall(r'(\w+)="(.*?)"', line))
-            print(fields)
             if fields.get('TYPE') != 'disk':
                 continue
             
+            name = fields['NAME']  # 예: sda, sdb
+            if name == os_disk:
+                continue  # OS 디스크는 제외
+
             dev_path = f"/dev/{fields['NAME']}"
             disks.append({
-                'name': fields['NAME'],
+                'name': name,
                 'path': dev_path,
                 'size': fields.get('SIZE'),
                 'model': fields.get('MODEL'),
@@ -55,6 +69,7 @@ class DiskList(Resource):
 # @zpool_bp.route('/list', methods=['GET'])
 @zpool_api.route('/list')
 class ZpoolList(Resource):
+    @zpool_api.doc(description='zpool 전체 목록 조회')
     @jwt_required()
     def get(self):
         
@@ -83,6 +98,7 @@ class ZpoolList(Resource):
 # zpool 생성
 @zpool_api.route('/create')
 class CreateZpool(Resource):
+    @zpool_api.doc(description='zpool 생성')
     @jwt_required()
     @zpool_api.expect(zpool_create_model)
     def post(self):
@@ -156,6 +172,7 @@ class CreateZpool(Resource):
 # @zpool_bp.route('/status/<pool_name>', methods=['GET'])
 @zpool_api.route('/properties/<pool_name>')
 class ZpoolStatus(Resource):
+    @zpool_api.doc(description='zpool 속성 조회')
     @jwt_required()
     def get(self, pool_name):
         try:
@@ -199,6 +216,7 @@ class ZpoolStatus(Resource):
 # @zpool_bp.route('/delete/<pool_name>', methods=['DELETE'])
 @zpool_api.route('/delete/<pool_name>')
 class DeleteZpool(Resource):
+    @zpool_api.doc(description='zpool 삭제')
     @jwt_required()
     def delete(self, pool_name):
         try:
@@ -227,6 +245,7 @@ class DeleteZpool(Resource):
 
 @zpool_api.route('/status/<pool_name>')
 class ZpoolStatus(Resource):
+    @zpool_api.doc(description='zpool 상태 조회')
     def get(self, pool_name):
         try:
             # subprocess.run으로 zpool status 명령 실행

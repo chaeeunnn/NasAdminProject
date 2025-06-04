@@ -22,6 +22,7 @@ create_zfs_model = zfs_api.model('CreateZFS', {
 # zfs 전체 조회
 @zfs_api.route('/list')
 class ZFS_list(Resource):
+    @zfs_api.doc(description='zfs 전체 조회')
     @jwt_required()
     def get(self):
         columns = ['NAME', 'USED', 'AVAIL', 'REFER', 'MOUNTPOINT']
@@ -44,6 +45,7 @@ class ZFS_list(Resource):
 # zfs 상세 조회 (속성)
 @zfs_api.route('/properties')
 class ZFS_Status(Resource):
+    @zfs_api.doc(description='zfs 속성 조회')
     @jwt_required()
     @zfs_api.expect(get_zfs_model)
     def post(self):
@@ -87,6 +89,7 @@ class ZFS_Status(Resource):
 # zfs 생성
 @zfs_api.route('/create')
 class ZFSCreate(Resource):
+    @zfs_api.doc(description='zfs 생성')
     @jwt_required()
     @zfs_api.expect(create_zfs_model)
     def post(self):
@@ -128,6 +131,7 @@ class ZFSCreate(Resource):
 # zfs 삭제
 @zfs_api.route('/delete/<pool_name>/<zfs_name>')
 class DeleteZFS(Resource):
+    @zfs_api.doc(description='zfs 삭제')
     @jwt_required()
     def delete(self, pool_name, zfs_name):
         full_name = f'{pool_name}/{zfs_name}'

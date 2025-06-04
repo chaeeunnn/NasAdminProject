@@ -20,6 +20,7 @@ nfs_control_model = nfs_api.model('NFSControl', {
 # NFS 활성화되어있는지 확인
 @nfs_api.route('/status')
 class NFSStatus(Resource):
+    @nfs_api.doc(description='NFS 활성화 확인')
     @jwt_required()
     def get(self):
         try:
@@ -49,6 +50,7 @@ class NFSStatus(Resource):
 # NFS 전체 활성화
 @nfs_api.route('/enable')
 class NFSEnable(Resource):
+    @nfs_api.doc(description='NFS 활성화')
     @jwt_required()
     def get(self):
         try:
@@ -63,6 +65,7 @@ class NFSEnable(Resource):
 # NFS 전체 비활성화
 @nfs_api.route('/disable')
 class NFSDisable(Resource):
+    @nfs_api.doc(description='NFS 비활성화')
     @jwt_required()
     def get(self):
         try:
@@ -77,6 +80,7 @@ class NFSDisable(Resource):
 # 공유 대상 등록
 @nfs_api.route('/share')
 class NFSShare(Resource):
+    @nfs_api.doc(description='공유 대상 등록')
     @jwt_required()
     @nfs_api.expect(nfs_share_model)
     def post(self):
@@ -102,6 +106,7 @@ class NFSShare(Resource):
 # 공유 목록 조회
 @nfs_api.route('/share/list')
 class SharedList(Resource):
+    @nfs_api.doc(description='모든 공유 목록 조회')
     @jwt_required()
     def get(self):
         try:
@@ -134,22 +139,41 @@ class SharedList(Resource):
                 'stderr': e.stderr,
             }, 500
 
-# 상세 조회 (특정 ZFS 기준)
+# 특정 ZFS 기준 공유 목록 조회
 @nfs_api.route('/share/<string:zpool_name>/<string:zfs_name>')
 class ShareDetail(Resource):
+    @nfs_api.doc(description='특정 ZFS 기준 공유 목록 조회')
     @jwt_required()
     def get(self, zpool_name, zfs_name):
         full_name = f'{zpool_name}/{zfs_name}'
         result = subprocess.run(['exportfs', '-v'], capture_output=True, encoding='utf-8', check=True)
         lines = result.stdout.strip().split('\n')
-        matched = [line for line in lines if full_name in line]
+        shares = []
+        for line in lines:
+            if '(' in line and ')' in line:
+                # 공유 디렉토리 경로 추출
+                share = line.split()
+                path = share[0]
+                
+                # client(ip)와 옵션 추출
+                client_part = ' '.join(share[1:])
+                client, options_str = client_part.split('(')
+                client = client.strip()
+                options = options_str.strip(')').split(',')
+                
+                shares.append({
+                    'path': path,
+                    'client': client,
+                    'options': options
+                })
         return {
-            'details': matched,
-            'count': len(matched)}
+            'details': shares,
+            'count': len(shares)}
 
-#  공유 비활성화 (unshare)
+# 공유 비활성화 (unshare)
 @nfs_api.route('/unshare')
 class NFSUnshare(Resource):
+    @nfs_api.doc(description='공유 비활성화')
     @jwt_required()
     @nfs_api.expect(nfs_control_model)
     def post(self):
