@@ -1,7 +1,8 @@
 from flask import request
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required
-import subprocess
+from utils.zpool_utils import is_pool_name_exists
+import subprocess, re
 from datetime import datetime
 
 snapshot_api = Namespace('snapshot', description='스냅샷 관련 API')
@@ -34,6 +35,14 @@ class CreateSnapshot(Resource):
         snapshot_name = f'{zfs_full_name}@{timestamp}'
         
         try:
+            # 존재하는 pool인지 확인
+            if not is_pool_name_exists(pool_name):
+                return {'error': f'해당 pool을 찾을 수 없습니다. : {pool_name}'}
+            # 존재하는 zfs인지 확인
+            check = subprocess.run(['zfs', 'list', full_name], capture_output=True, text=True)
+            if check.returncode != 0:
+                return {'error': f'해당 ZFS를 찾을 수 없습니다. : {full_name}', 'stderr':check.stderr}, 400
+
             result = subprocess.run(['zfs', 'snapshot', snapshot_name], check=True)
             return {
                 'message': f'Snapshot 생성 완료: {snapshot_name}',
@@ -91,7 +100,41 @@ class RollbackSnapshot(Resource):
         data = request.get_json()
         snapshot_name = data['snapshot_name']
 
+        # pool/zfs@snapshot 형식 검증 및 분리
+        match = re.match(r'^([\w\-./]+)@([\w\-]+)$', snapshot_name)
+        if not match:
+            return {'error': '스냅샷 이름 형식이 잘못되었습니다. 예: pool/zfs@20240609-153000'}, 400
+
+        zfs_full_name = match.group(1)
+        pool_name = zfs_full_name.split('/')[0]
+
         try:
+            # pool 존재 확인
+            if not is_pool_name_exists(pool_name):
+                return {'error': f'해당 pool을 찾을 수 없습니다: {pool_name}'}, 400
+
+            # zfs 존재 여부 확인
+            check = subprocess.run(['zfs', 'list', zfs_full_name], capture_output=True, text=True)
+            if check.returncode != 0:
+                return {'error': f'ZFS 파일시스템이 존재하지 않습니다: {zfs_full_name}'}, 400
+
+            # 스냅샷 존재 여부 확인
+            snapshot_check = subprocess.run(
+                ['zfs', 'list', '-t', 'snapshot', '-H', '-o', 'name'],
+                capture_output=True, text=True
+            )
+            snapshot_names = snapshot_check.stdout.strip().split('\n')
+            print(snapshot_names)
+            print(zfs_full_name)
+            if snapshot_name not in snapshot_names:
+                # 해당 ZFS의 스냅샷 목록 필터링
+                related = [s for s in snapshot_names if s.startswith(f'{zfs_full_name}@')]
+                return {
+                    'error': f'해당 스냅샷이 존재하지 않습니다: {snapshot_name}',
+                    '해당 ZFS의 스냅샷 목록': related
+                }, 404
+            
+            # 롤백
             result = subprocess.run(['zfs', 'rollback', '-r', snapshot_name],
                                     capture_output=True, text=True, check=True)
             return {
@@ -117,7 +160,37 @@ class DeleteSnapshot(Resource):
         data = request.get_json()
         snapshot_name = data['snapshot_name']
 
+        match = re.match(r'^([\w\-./]+)@([\w\-]+)$', snapshot_name)
+        if not match:
+            return {'error': '스냅샷 이름 형식이 잘못되었습니다. 예: pool/zfs@20240609-153000'}, 400
+
+        zfs_full_name = match.group(1)
+        pool_name = zfs_full_name.split('/')[0]
+
         try:
+            # pool 존재 확인
+            if not is_pool_name_exists(pool_name):
+                return {'error': f'해당 pool을 찾을 수 없습니다: {pool_name}'}, 400
+
+            # zfs 존재 여부 확인
+            check = subprocess.run(['zfs', 'list', zfs_full_name], capture_output=True, text=True)
+            if check.returncode != 0:
+                return {'error': f'ZFS 파일시스템이 존재하지 않습니다: {zfs_full_name}'}, 400
+
+            # 스냅샷 존재 여부 확인
+            snapshot_check = subprocess.run(
+                ['zfs', 'list', '-t', 'snapshot', '-H', '-o', 'name'],
+                capture_output=True, text=True
+            )
+            snapshot_names = snapshot_check.stdout.strip().split('\n')
+            if snapshot_name not in snapshot_names:
+                related = [s for s in snapshot_names if s.startswith(f'{zfs_full_name}@')]
+                return {
+                    'error': f'해당 스냅샷이 존재하지 않습니다: {snapshot_name}',
+                    '해당 ZFS의 스냅샷 목록': related
+                }, 404
+
+            # 삭제
             result = subprocess.run(
                 ['zfs', 'destroy', snapshot_name],
                 capture_output=True,

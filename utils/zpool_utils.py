@@ -1,4 +1,4 @@
-import subprocess, os
+import subprocess, os, re
 
 # 해당 디스크가 다른 zpool에 사용 중인지 확인
 def is_device_in_use(device):
@@ -39,11 +39,13 @@ def is_pool_name_exists(pool_name):
 
 def get_smart_health(device):
     try:
+        # -A 옵션으로 세부 확인 가능
         result = subprocess.run(['smartctl', '-H', device], capture_output=True, encoding='utf-8', check=True)
         for line in result.stdout.splitlines():
             if "SMART overall-health self-assessment test result" in line:
                 # 예: "SMART overall-health self-assessment test result: PASSED"
+                # PASSED: 디스크 정상 상태 / FAILED: 디스크 위험 상태
                 return line.split(":")[-1].strip()
-        return "UNKNOWN"
+        return "UNKNOWN" # 결과 문구를 찾을 수 없음
     except subprocess.CalledProcessError:
-        return "UNAVAILABLE"
+        return "UNAVAILABLE" # SMART 기능이 없거나 명령 실행 실패

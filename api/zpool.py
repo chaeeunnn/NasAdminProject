@@ -21,49 +21,49 @@ class DiskList(Resource):
     @zpool_api.doc(description='물리 디스크 목록 조회')
     @jwt_required()
     def get(self):
-        # 1. 루트가 마운트된 디스크명 추출
-        root_mount = subprocess.run("findmnt -n -o SOURCE /boot", shell=True, capture_output=True, text=True)
-        root_device = root_mount.stdout.strip()  # 예: /dev/sda2
-
-        os_disk = ''
-        if root_device.startswith('/dev/'):
-            # 파티션 이름에서 디스크 이름만 추출 (예: /dev/sda2 → sda)
-            os_disk = re.findall(r'/dev/([a-z]+)', root_device)[0]
-        
-        print(os_disk)
-
-        # 이름, 사이즈(GB), 모델명, 타입 출력
-        result = subprocess.run("lsblk -dn -o NAME,SIZE,MODEL,TYPE -P", shell=True, capture_output=True, encoding='utf-8')
-        
-        lines = result.stdout.strip().split('\n')
-        disks = []
-        
-        for line in lines:
-            fields = dict(re.findall(r'(\w+)="(.*?)"', line))
-            if fields.get('TYPE') != 'disk':
-                continue
+        try: 
+            # 루트가 마운트된 디스크명 추출
+            os_disk = ''
+            result = subprocess.run("findmnt -n -o SOURCE /boot", shell=True, capture_output=True, text=True)
+            match = re.findall(r'/dev/([a-z]+)', result.stdout.strip())
+            if match:
+                os_disk = match[0]
             
-            name = fields['NAME']  # 예: sda, sdb
-            if name == os_disk:
-                continue  # OS 디스크는 제외
+            print(os_disk)
 
-            dev_path = f"/dev/{fields['NAME']}"
-            disks.append({
-                'name': name,
-                'path': dev_path,
-                'size': fields.get('SIZE'),
-                'model': fields.get('MODEL'),
-                'in_use': True if is_device_in_use(dev_path) else False,
-                'health': get_smart_health(dev_path)
-            })
+            # 이름, 사이즈(GB), 모델명, 타입 출력
+            lsblk_result = subprocess.run("lsblk -dn -o NAME,SIZE,MODEL,TYPE -P", shell=True, capture_output=True, encoding='utf-8')
+            lines = lsblk_result.stdout.strip().split('\n')
 
-        response = {
-            'disks': disks,
-            'stderr': result.stderr,
-            'returncode': result.returncode
-        }
-        
-        return jsonify(response)
+            disks = []
+            for line in lines:
+                attrs = dict(re.findall(r'(\w+)="(.*?)"', line))
+                if fields.get('TYPE') != 'disk':
+                    continue
+                if attrs.get('NAME') == os_disk:
+                    continue
+                dev_path = f"/dev/{attrs['NAME']}"
+                disks.append({
+                    'name': attrs['NAME'],
+                    'path': dev_path,
+                    'size': fields.get('SIZE'),
+                    'model': fields.get('MODEL'),
+                    'in_use': is_device_in_use(dev_path),
+                    'health': get_smart_health(dev_path)
+                })
+
+            return {
+                'disks': disks,
+                'stderr': lsblk_result.stderr,
+                'returncode': lsblk_result.returncode
+            }, 200
+        except subprocess.CalledProcessError as e:
+            return {
+                'error': '디스크 목록 조회에 실패했습니다.',
+                'stdout': e.stdout,
+                'stderr': e.stderr,
+                'returncode': e.returncode
+            }, 500
 
 # zpool 전체 목록 조회
 # @zpool_bp.route('/list', methods=['GET'])
@@ -75,6 +75,8 @@ class ZpoolList(Resource):
         
         result = subprocess.run('zpool list', capture_output=True, shell=True, encoding='UTF-8')
         lines = result.stdout.strip().split('\n')
+        if not lines:
+            return {'Zpool 목록이 없습니다.'}, 200
         
         zpool_list = []
         column_names = lines[0].split()
@@ -82,7 +84,7 @@ class ZpoolList(Resource):
         print(lines)
 
         for line in lines[1:]:
-            fields = line.split() # -H 옵션은 tab 구분자 사용
+            fields = line.split()
             if len(fields) < len(column_names):
                 continue  # 필드 누락 방지
             zpool_list.append(dict(zip(column_names, fields)))
@@ -105,51 +107,65 @@ class CreateZpool(Resource):
         data = request.get_json()
 
         if not data:
-            return {'error': 'No input data provided'}, 400
+            return {'error': '입력 데이터가 제공되지 않았습니다.'}, 400
         
         pool_name = data.get('pool_name')
         raid_mode = data.get('raid_mode')
-        devices = data.get('devices')
+        devices = data.get('devices') # 예) ["/dev/sdb", "/dev/sdc", ..]
         spares = data.get('spares', [])
 
         raid_mode = raid_mode.lower()
 
+        # 필수 입력값이 누락되었을 때
+        if not pool_name or not raid_mode or not devices:
+            return {'error': '필수 항목(pool_name, raid_mode, devices)이 누락되었습니다.'}, 400
+
+        # devices와 spares가 리스트 형식이 아닐 때
+        if not isinstance(devices, list) or not isinstance(spares, list):
+            return {'error': 'devices와 spares는 리스트 형식이어야 합니다.'}, 400
+
+        # 풀 이름 규칙
+        # 허용 문자 : 영문자, 숫자, -, _, .
+        # 슬래시(/), 공백, 탭, 특수문자 불가
+        # 대소문자 구분
+        if not re.fullmatch(r'^[a-zA-Z0-9_.-]+$', pool_name):
+            return {'error': 'pool_name은 영문자, 숫자, "_", "-", "."만 사용할 수 있습니다.'}, 400
+
+        # 풀 이름 중복 확인
         if is_pool_name_exists(pool_name):
-            return {'error': f'Pool name <{pool_name}> already exists'}, 400
+            return {'error': f'이미 존재하는 풀 이름입니다: <{pool_name}>'}, 400
 
-        if not pool_name or not raid_mode or not devices or not isinstance(devices, list):
-            return {'error': 'Invalid input data'}, 400
-
+        # device가 사용 중인지 확인
         used_devices = [d for d in devices + spares if is_device_in_use(d)]
+        print(used_devices)
         if used_devices:
             return {
-                'error': 'Some devices are already in use by other zpools',
+                'error': '다른 zpool에서 사용 중인 디바이스가 있습니다.',
                 'used_devices': used_devices
             }, 400
 
         cmd = ['zpool', 'create', pool_name]
 
-        if raid_mode == 'stripe':
-            min_disks = 2
-            cmd += devices
-        elif raid_mode == 'mirror':
-            min_disks = 2
-            cmd += ['mirror'] + devices
-        elif raid_mode == 'raidz1':
-            min_disks = 3
-            cmd += ['raidz'] + devices
-        elif raid_mode == 'raidz2':
-            min_disks = 4
-            cmd += ['raidz2'] + devices
-        elif raid_mode == 'raidz3':
-            min_disks = 4
-            cmd += ['raidz3'] + devices
-        else:
-            return {'error': 'Unknown raid_mode'}, 400
+        # 풀 생성 방식
+        min_devices_required = { # 최소 디바이스 개수
+            'stripe': 2,
+            'mirror': 2,
+            'raidz1': 3,
+            'raidz2': 4,
+            'raidz3': 4
+        }
 
-        if len(devices) < min_disks:
-            return {'error': f'{raid_mode} requires at least {min_disks} devices'}, 400
+        if raid_mode not in min_devices_required:
+            return {'error': f'알 수 없는 RAID 모드입니다: {raid_mode}'}, 400
 
+        if len(devices) < min_devices_required[raid_mode]:
+            return {'error': f'{raid_mode} 모드는 최소 {min_devices_required[raid_mode]}개의 디바이스가 필요합니다.'}, 400
+
+        used_devices = [d for d in devices + spares if is_device_in_use(d)]
+        if used_devices:
+            return {'error': '일부 디바이스가 이미 사용 중입니다.', 'used_devices': used_devices}, 400
+
+        # 예비 디스크 있으면 명령어에 추가
         if spares:
             cmd += ['spare'] + spares
 
@@ -162,7 +178,7 @@ class CreateZpool(Resource):
             }, 200
         except subprocess.CalledProcessError as e:
             return {
-                'error': 'Failed to create zpool',
+                'error': 'Zpool 생성에 실패했습니다.',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode
@@ -206,7 +222,7 @@ class ZpoolStatus(Resource):
         
         except subprocess.CalledProcessError as e:
             return {
-                'error': f'Failed to get properties for zpool {pool_name}',
+                'error': f'{pool_name} 풀의 속성 조회에 실패했습니다.',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode
@@ -228,7 +244,7 @@ class DeleteZpool(Resource):
             )
             
             return jsonify({
-                'message': f'Zpool {pool_name} deleted successfully',
+                'message': f'Zpool {pool_name} 삭제 완료',
                 'stdout': result.stdout.strip().split('\n'),
                 'stderr': result.stderr,
                 'returncode': result.returncode
@@ -236,7 +252,7 @@ class DeleteZpool(Resource):
             
         except subprocess.CalledProcessError as e:
             return jsonify({
-                'error': f'Failed to delete zpool {pool_name}',
+                'error': f'{pool_name} 풀 삭제에 실패했습니다.',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode
@@ -299,7 +315,7 @@ class ZpoolStatus(Resource):
         except subprocess.CalledProcessError as e:
             # 명령 실패시 오류 정보 반환
             return jsonify({
-                'error': f'Failed to get status for zpool {pool_name}',
+                'error': f'{pool_name} 풀의 상태 조회에 실패했습니다.',
                 'stdout': e.stdout,
                 'stderr': e.stderr,
                 'returncode': e.returncode
