@@ -1,8 +1,0 @@
-{
-  "admin": {
-    "password": "scrypt:32768:8:1$fDstZed9lsC85NCT$52eb0629d4a367f99edf66b380740649d2e1ffaea925f69abd388c5d4a5d4dc20edf3fbaaae2825bc02b092046d1b635667f9f6df3c441f886d0bf558775e10e"
-  },
-  "user1": {
-    "password": "scrypt:32768:8:1$x7KgcA7LHSK2hX9P$7b1d9e7af8ceca848c3904b941212aab80067b2baab5536e127f97659b5bdcf7aeec5d4004c4888cb4c2eaeb15c26f32fff23324338ce593a2d7fef12af5be07"
-  }
-}
