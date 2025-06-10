@@ -3,8 +3,10 @@ from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required
 import subprocess
 from utils.zpool_utils import is_pool_name_exists
+from utils.logger import get_logger
 
 zfs_api = Namespace('zfs', description='ZFS 관련 API')
+logger = get_logger("zfs")
 
 get_zfs_model = zfs_api.model('ZFSList', {
     'pool_name': fields.String(required=True, description='Zpoool 이름'),
@@ -26,6 +28,7 @@ class ZFS_list(Resource):
     @zfs_api.doc(description='zfs 전체 조회')
     @jwt_required()
     def get(self):
+        logger.info("zfs 전체 조회 요청")
         try: 
             columns = ['NAME', 'USED', 'AVAIL', 'REFER', 'MOUNTPOINT']
             result = subprocess.run(['zfs', 'list', '-H', '-o', 'name,used,avail,refer,mountpoint'], capture_output=True, encoding='utf-8')
@@ -35,13 +38,14 @@ class ZFS_list(Resource):
             for line in lines:
                 values = line.split('\t')
                 zfs_list.append(dict(zip(columns, values)))
-
+            logger.info(f"zfs 전체 조회 성공: {len(zfs_list)}개 항목 반환")
             return {
                 'zfs': zfs_list,
                 'stderr': result.stderr,
                 'returncode': result.returncode
             }
         except subprocess.CalledProcessError as e:
+            logger.error(f"zfs 전체 조회 실패: {str(e)}")
             return {'error': str(e)}, 500    
         
 # zfs 상세 조회 (속성)
@@ -51,9 +55,11 @@ class ZFS_Status(Resource):
     @jwt_required()
     @zfs_api.expect(get_zfs_model)
     def post(self):
+        logger.info("zfs 속성 조회 요청")
         data = request.get_json()
 
         if not data:
+            logger.warning("zfs 속성 조회 요청 실패: 입력된 데이터가 없습니다.")
             return {'error': '입력된 데이터가 없습니다.'}, 400
         
         pool_name = data.get('pool_name')
@@ -63,10 +69,12 @@ class ZFS_Status(Resource):
         try:
             # 존재하는 pool인지 확인
             if not is_pool_name_exists(pool_name):
+                logger.warning(f"zfs 속성 조회 실패: 존재하지 않는 pool {pool_name}")
                 return {'error': f'해당 pool을 찾을 수 없습니다. : {pool_name}'}
             # 존재하는 zfs인지 확인
             check = subprocess.run(['zfs', 'list', full_name], capture_output=True, text=True)
             if check.returncode != 0:
+                logger.warning(f"zfs 속성 조회 실패: 존재하지 않는 ZFS {full_name}, stderr: {check.stderr}")
                 return {'error': f'해당 ZFS를 찾을 수 없습니다. : {full_name}', 'stderr':check.stderr}, 400
             
             key_props = [
@@ -87,14 +95,14 @@ class ZFS_Status(Resource):
                     name, prop, value, source = parts
                     response.append({prop: value})
                 
-            response = {
+            logger.info(f"zfs 속성 조회 성공: {full_name}")
+            return {
                 'zfs': response,
                 'stderr': result.stderr,
                 'returncode': result.returncode
             }
-        
-            return response
         except subprocess.CalledProcessError as e:
+            logger.error(f"zfs 속성 조회 중 오류 발생: {str(e)}")
             return {'error': f'속성 조회 중 오류가 발생했습니다: {str(e)}'}, 500
 
 # zfs 생성
@@ -104,6 +112,7 @@ class ZFSCreate(Resource):
     @jwt_required()
     @zfs_api.expect(create_zfs_model)
     def post(self):
+        logger.info("zfs 생성 요청")
         data = request.json
         pool_name = data.get('pool_name')
         zfs_name = data.get('zfs_name')
@@ -114,15 +123,18 @@ class ZFSCreate(Resource):
         # 슬래시(/), 공백, 탭, 특수문자 불가 (pool 이름을 따로 받기 때문에 슬래시 허용 안 하는 걸로)
         # 대소문자 구분
         if not bool(re.fullmatch(r'^[a-zA-Z0-9_.-]+$', zfs_name)):
+            logger.warning(f"zfs 생성 실패: 이름 규칙 위반 - {zfs_name}")
             return {'error': 'zfs 이름은 영문자, 숫자, "_", "-", "."만 사용할 수 있습니다.'}, 400
 
         try:
             # 존재하는 pool인지 확인
             if not is_pool_name_exists(pool_name):
+                logger.warning(f"zfs 생성 실패: 존재하지 않는 pool {pool_name}")
                 return {'error': f'해당 pool을 찾을 수 없습니다. : {pool_name}'}
             # 중복 여부 확인
             check = subprocess.run(['zfs', 'list', full_name], capture_output=True, text=True)
             if check.returncode == 0:
+                logger.warning(f"zfs 생성 실패: 이미 존재하는 ZFS {full_name}")
                 return {'error': f'ZFS {full_name}은(는) 이미 존재합니다.'}, 400
             
             # 1. 파일시스템 생성
@@ -141,12 +153,13 @@ class ZFSCreate(Resource):
                 subprocess.run(['zfs', 'set', f"readonly={data['readonly']}", full_name], check=True)
             if data.get('mountpoint'):
                 subprocess.run(['zfs', 'set', f"mountpoint={data['mountpoint']}", full_name], check=True)
-
+            logger.info(f"zfs 생성 성공: {full_name}")
             return {
                 'message': f'{full_name} 생성 및 설정이 완료되었습니다.'
                 }, 201
 
         except subprocess.CalledProcessError as e:
+            logger.error(f"zfs 생성 중 오류 발생: {str(e)}")
             return {'error': f'ZFS 생성 중 오류가 발생했습니다: {str(e)}'}, 500
 
 # zfs 삭제
@@ -156,13 +169,16 @@ class DeleteZFS(Resource):
     @jwt_required()
     def delete(self, pool_name, zfs_name):
         full_name = f'{pool_name}/{zfs_name}'
+        logger.info(f"zfs 삭제 요청: {full_name}")
         try:
             # 존재하는 pool인지 확인
             if not is_pool_name_exists(pool_name):
+                logger.warning(f"zfs 삭제 실패: 존재하지 않는 pool {pool_name}")
                 return {'error': f'해당 pool을 찾을 수 없습니다. : {pool_name}'}
             # 존재하는 zfs인지 확인
             check = subprocess.run(['zfs', 'list', full_name], capture_output=True, text=True)
             if check.returncode != 0:
+                logger.warning(f"zfs 삭제 실패: 존재하지 않는 ZFS {full_name}, stderr: {check.stderr}")
                 return {'error': f'해당 ZFS를 찾을 수 없습니다. : {full_name}', 'stderr':check.stderr}, 400
 
             result = subprocess.run(
@@ -171,7 +187,7 @@ class DeleteZFS(Resource):
                 encoding='utf-8',
                 check=True
             )
-            
+            logger.info(f"zfs 삭제 성공: {full_name}")
             return {
                 'message': f'ZFS {full_name}가 삭제되었습니다.',
                 'stdout': result.stdout.strip().split('\n'),
@@ -180,6 +196,7 @@ class DeleteZFS(Resource):
             }
             
         except subprocess.CalledProcessError as e:
+            logger.error(f"zfs 삭제 실패: {full_name}, error: {str(e)}")
             return {
                 'error': f'ZFS {full_name} 삭제에 실패하였습니다.',
                 'stdout': e.stdout,
